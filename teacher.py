@@ -21,7 +21,7 @@ def ask_teacher(messages, student_context=""):
     full_messages.extend(messages)
     
     response = client.chat.completions.create(
-        model="deepseek-chat",
+        model="model="deepseek/deepseek-chat-v2.5",
         messages=full_messages,
         temperature=0.7,
         max_tokens=2000
