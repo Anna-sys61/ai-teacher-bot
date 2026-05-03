@@ -25,7 +25,7 @@ def init_qdrant():
 
 def get_embedding(text):
     response = deepseek_client.embeddings.create(
-        model="text-embedding-3-small",
+        model="deepseek-chat",
         input=text
     )
     return response.data[0].embedding
