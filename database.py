@@ -115,7 +115,7 @@ async def get_memory_context(telegram_id, query_text, limit=3):
 
 async def save_memory(telegram_id, text):
     """Сохраняет событие и в Qdrant, и в SQLite"""
-    add_memory_qdrant(telegram_id, text)
+   # add_memory_qdrant(telegram_id, text)
     async with aiosqlite.connect(DATABASE) as db:
         await db.execute("INSERT INTO memory (telegram_id, text) VALUES (?, ?)", (telegram_id, text))
         await db.commit()
