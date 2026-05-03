@@ -1,0 +1,6 @@
+aiogram>=3.0
+openai
+aiofiles
+python-dotenv
+aiohttp
+aiosqlite

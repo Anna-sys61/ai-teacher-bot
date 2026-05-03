@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: ai-teacher-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        value: 8538494065:AAH2RZxFtk_Ty7RvinD6sLgN22zNB-2VuWA
+      - key: DEEPSEEK_API_KEY
+        value: sk-1b1e18fd39f54c9eb84c7e28c6698dd3
+      - key: DEEPSEEK_BASE_URL
+        value: https://api.deepseek.com/v1
+      - key: QDRANT_URL
+        value: https://f1f31447-82ff-43c8-8544-a486f3f58cc4.us-east4-0.gcp.cloud.qdrant.io
+      - key: QDRANT_API_KEY
+        value: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6Yzg1ZThjNjAtZjBiOC00MzllLWEwMTMtOTkwOGNjNzIwZDY4In0.HHSZHkdG_z85rUkdXNvMv7ZsMXDb6UjzP-N5DGEDoeY
