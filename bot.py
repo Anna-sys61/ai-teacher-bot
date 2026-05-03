@@ -4,7 +4,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 import config
 from database import (init_db, get_student, add_student, set_awaiting_submission,
-                      add_submission, save_memory, get_memory_context)
+                      add_submission, save_memory, get_memory_context, update_progress)
 from teacher import ask_teacher, evaluate_submission
 from image_gen import generate_image
 
