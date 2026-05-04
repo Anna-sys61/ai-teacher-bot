@@ -144,13 +144,17 @@ async def cmd_generate(message: types.Message):
         await message.answer("Напиши промпт после команды, например: /generate кот в космосе")
         return
     
+    # Сбрасываем режим ожидания домашки
+    await set_awaiting_submission(message.from_user.id, False)
+    await save_memory(message.from_user.id, f"Запрос на генерацию: {prompt}")
+    
     await message.answer("🎨 Генерирую изображение...")
     try:
         url = await generate_image(prompt)
         if url:
             await message.answer_photo(url, caption=prompt)
         else:
-            await message.answer("⚠️ Генерация изображений пока недоступна в тестовой версии. Но ты можешь использовать Kandinsky или Midjourney вручную!")
+            await message.answer("⚠️ Не удалось сгенерировать изображение. Возможно, закончился лимит запросов к Pixazo.")
     except Exception as e:
         await message.answer(f"⚠️ Генерация изображений пока недоступна. Используй Kandinsky или Midjourney вручную!")
 
