@@ -1,3 +1,98 @@
+import asyncio
+import logging
+import threading
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from flask import Flask
+import config
+from database import (init_db, get_student, add_student, set_awaiting_submission,
+                      add_submission, save_memory, get_memory_context, update_progress)
+from teacher import ask_teacher, evaluate_submission
+from image_gen import generate_image
+from lessons import LESSONS
+
+logging.basicConfig(level=logging.INFO)
+
+bot = Bot(token=config.BOT_TOKEN)
+dp = Dispatcher()
+
+# Flask-заглушка, чтобы Render видел открытый порт
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=10000)
+
+# Критерии для оценки домашних заданий
+CRITERIA_DEFAULT = """
+- Понимание темы (1-5): насколько студент разобрался в материале
+- Качество выполнения (1-5): насколько аккуратно и полно сделана работа
+- Применимость для заработка (1-5): насколько результат можно продать реальному заказчику
+"""
+
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
+    await set_awaiting_submission(message.from_user.id, False)
+    student = await get_student(message.from_user.id)
+    if not student:
+        await add_student(message.from_user.id, message.from_user.full_name)
+        await message.answer(
+            "👋 Привет! Я твой AI-преподаватель курса «Нейросети для заработка: визуал, дизайн, видео».\n\n"
+            "За 15 уроков ты научишься создавать изображения, тексты и видео, которые можно продавать "
+            "реальным заказчикам: блогерам, селлерам Wildberries, владельцам Telegram-каналов.\n\n"
+            "📌 Каждый урок — это шаг к первой оплате.\n"
+            "📌 Я проверяю домашние задания, ставлю оценку и даю развёрнутую рецензию.\n"
+            "📌 Все уроки сохраняются — ты всегда можешь вернуться и перечитать.\n\n"
+            "Напиши /lesson чтобы начать первый урок!"
+        )
+    else:
+        mod, les = student[2], student[3]
+        await message.answer(
+            f"С возвращением! Ты остановился на модуле {mod}, уроке {les}.\n"
+            f"Напиши /lesson чтобы продолжить."
+        )
+
+@dp.message(Command("lesson"))
+async def cmd_lesson(message: types.Message):
+    await set_awaiting_submission(message.from_user.id, False)
+    student = await get_student(message.from_user.id)
+    if not student:
+        await message.answer("Сначала нажми /start")
+        return
+    
+    mod, les = student[2], student[3]
+    lesson_text = LESSONS.get((mod, les))
+    
+    if not lesson_text:
+        await message.answer("🎉 Урок пока не готов. Напиши /progress, чтобы узнать, что пройдено.")
+        return
+    
+    await save_memory(message.from_user.id, f"Начат урок {mod}.{les}")
+    
+    # Разбиваем длинный текст на части по 4000 символов
+    max_length = 4000
+    if len(lesson_text) <= max_length:
+        await message.answer(lesson_text)
+    else:
+        parts = []
+        text = lesson_text
+        while len(text) > max_length:
+            split_index = text.rfind('\n', 0, max_length)
+            if split_index == -1:
+                split_index = max_length
+            parts.append(text[:split_index])
+            text = text[split_index:].lstrip()
+        if text:
+            parts.append(text)
+        
+        for part in parts:
+            await message.answer(part)
+    
+    await set_awaiting_submission(message.from_user.id, True, "text")
+
 @dp.message()
 async def handle_message(message: types.Message):
     student = await get_student(message.from_user.id)
@@ -57,6 +152,7 @@ async def handle_message(message: types.Message):
             
         except Exception as e:
             await message.answer(f"❌ Ошибка при проверке: {e}")
+            logging.error(f"Ошибка проверки ДЗ: {e}")
     
     else:
         # Обычный диалог
@@ -64,3 +160,39 @@ async def handle_message(message: types.Message):
         response = ask_teacher([{"role": "user", "content": message.text}], student_context=context)
         await save_memory(message.from_user.id, f"Диалог: {message.text[:100]}")
         await message.answer(response)
+
+@dp.message(Command("generate"))
+async def cmd_generate(message: types.Message):
+    await set_awaiting_submission(message.from_user.id, False)
+    prompt = message.text.replace("/generate", "").strip()
+    if not prompt:
+        await message.answer("Напиши промпт после команды, например: /generate кот в космосе")
+        return
+    
+    await save_memory(message.from_user.id, f"Запрос на генерацию: {prompt}")
+    await message.answer("🎨 Генерирую изображение...")
+    try:
+        url = await generate_image(prompt)
+        if url:
+            await message.answer_photo(url, caption=prompt)
+        else:
+            await message.answer("⚠️ Не удалось сгенерировать изображение. Возможно, закончился лимит запросов к Pixazo.")
+    except Exception as e:
+        await message.answer("⚠️ Генерация изображений пока недоступна. Используй Kandinsky или Midjourney вручную!")
+
+@dp.message(Command("progress"))
+async def cmd_progress(message: types.Message):
+    student = await get_student(message.from_user.id)
+    if not student:
+        await message.answer("Сначала нажми /start")
+        return
+    mod, les = student[2], student[3]
+    await message.answer(f"📊 Твой прогресс:\n• Модуль: {mod} из 3\n• Урок: {les} из 15\n\nВсего пройдено: {(mod-1)*5 + (les-1)} уроков из 15")
+
+async def main():
+    await init_db()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    threading.Thread(target=run_flask, daemon=True).start()
+    asyncio.run(main())
