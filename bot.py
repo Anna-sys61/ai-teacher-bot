@@ -57,7 +57,26 @@ async def cmd_lesson(message: types.Message):
         return
     
     await save_memory(message.from_user.id, f"Начат урок {mod}.{les}")
-    await message.answer(lesson_text)
+    
+    # Разбиваем длинный текст на части по 4000 символов
+    max_length = 4000
+    if len(lesson_text) <= max_length:
+        await message.answer(lesson_text)
+    else:
+        parts = []
+        text = lesson_text
+        while len(text) > max_length:
+            split_index = text.rfind('\n', 0, max_length)
+            if split_index == -1:
+                split_index = max_length
+            parts.append(text[:split_index])
+            text = text[split_index:].lstrip()
+        if text:
+            parts.append(text)
+        
+        for part in parts:
+            await message.answer(part)
+    
     await set_awaiting_submission(message.from_user.id, True, "text")
 @dp.message()
 async def handle_message(message: types.Message):
