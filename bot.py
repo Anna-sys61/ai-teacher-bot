@@ -85,23 +85,29 @@ async def handle_message(message: types.Message):
         await message.answer("Сначала нажми /start")
         return
     
-        if student[4] == 1:  # awaiting_submission
-          content = message.text or message.caption or ""
+    # Если это команда — не считаем домашкой
+    if message.text and message.text.startswith("/"):
+        return  # команды обрабатываются отдельно
+    
+    if student[4] == 1:  # awaiting_submission
+        content = message.text or message.caption or ""
+        # ... остальное без изменений
         
-          # Проверяем, не похоже ли сообщение на вопрос
-          question_words = ["как", "почему", "что", "какой", "где", "когда", "кто", "объясни", "подскажи", "расскажи", "помоги", "не понимаю", "не понял", "что такое"]
-          is_question = any(content.lower().strip().startswith(word) or content.lower().strip().endswith("?") for word in question_words)
+        # Проверяем, не похоже ли сообщение на вопрос
+        question_words = ["как", "почему", "что", "какой", "где", "когда", "кто", "объясни", "подскажи", "расскажи", "помоги", "не понимаю", "не понял", "что такое"]
+        is_question = any(content.lower().strip().startswith(word) or content.lower().strip().endswith("?") for word in question_words)
         
         if is_question:
-            # Это вопрос преподавателю
-            context = await get_memory_context(message.from_user.id)
+            # Это вопрос преподавателю, а не домашнее задание
+            context = await get_memory_context(message.from_user.id, message.text)
             response = ask_teacher([{"role": "user", "content": message.text}], student_context=context)
             await save_memory(message.from_user.id, f"Вопрос: {message.text[:100]}")
             await message.answer(response)
             return
         
-            # Если это не вопрос — проверяем как домашнее задание
+        # Если это не вопрос — проверяем как домашнее задание
         await message.answer("🔍 Проверяю твою работу... Это займёт несколько секунд.")
+        
         try:
             result = evaluate_submission("text", content, CRITERIA_DEFAULT)
             total_score = result.get("total_score", 0)
@@ -121,8 +127,6 @@ async def handle_message(message: types.Message):
             
             await message.answer(response)
             await set_awaiting_submission(message.from_user.id, False)
-            
-            # Двигаем прогресс
             await update_progress(message.from_user.id, mod, les + 1)
             await message.answer("✅ Прогресс обновлён! Напиши /lesson чтобы перейти к следующему уроку.")
             
@@ -132,7 +136,7 @@ async def handle_message(message: types.Message):
     
     else:
         # Обычный диалог
-        context = await get_memory_context(message.from_user.id)
+        context = await get_memory_context(message.from_user.id, message.text)
         response = ask_teacher([{"role": "user", "content": message.text}], student_context=context)
         await save_memory(message.from_user.id, f"Диалог: {message.text[:100]}")
         await message.answer(response)
