@@ -93,6 +93,24 @@ async def cmd_lesson(message: types.Message):
     
     await set_awaiting_submission(message.from_user.id, True, "text")
 
+@dp.message(Command("generate"))
+async def cmd_generate(message: types.Message):
+    await set_awaiting_submission(message.from_user.id, False)
+    prompt = message.text.replace("/generate", "").strip()
+    if not prompt:
+        await message.answer("Напиши промпт после команды, например: /generate кот в космосе")
+        return
+    
+    await save_memory(message.from_user.id, f"Запрос на генерацию: {prompt}")
+    await message.answer("🎨 Генерирую изображение...")
+    try:
+        url = await generate_image(prompt)
+        if url:
+            await message.answer_photo(url, caption=prompt)
+        else:
+            await message.answer("⚠️ Не удалось сгенерировать изображение. Возможно, закончился лимит запросов к Pixazo.")
+    except Exception as e:
+        await message.answer("⚠️ Генерация изображений пока недоступна. Используй Kandinsky или Midjourney вручную!")
 @dp.message()
 async def handle_message(message: types.Message):
     student = await get_student(message.from_user.id)
@@ -160,25 +178,6 @@ async def handle_message(message: types.Message):
         response = ask_teacher([{"role": "user", "content": message.text}], student_context=context)
         await save_memory(message.from_user.id, f"Диалог: {message.text[:100]}")
         await message.answer(response)
-
-@dp.message(Command("generate"))
-async def cmd_generate(message: types.Message):
-    await set_awaiting_submission(message.from_user.id, False)
-    prompt = message.text.replace("/generate", "").strip()
-    if not prompt:
-        await message.answer("Напиши промпт после команды, например: /generate кот в космосе")
-        return
-    
-    await save_memory(message.from_user.id, f"Запрос на генерацию: {prompt}")
-    await message.answer("🎨 Генерирую изображение...")
-    try:
-        url = await generate_image(prompt)
-        if url:
-            await message.answer_photo(url, caption=prompt)
-        else:
-            await message.answer("⚠️ Не удалось сгенерировать изображение. Возможно, закончился лимит запросов к Pixazo.")
-    except Exception as e:
-        await message.answer("⚠️ Генерация изображений пока недоступна. Используй Kandinsky или Midjourney вручную!")
 
 @dp.message(Command("progress"))
 async def cmd_progress(message: types.Message):
