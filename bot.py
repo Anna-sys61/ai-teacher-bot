@@ -85,23 +85,23 @@ async def handle_message(message: types.Message):
         await message.answer("Сначала нажми /start")
         return
     
-    if student[4] == 1:  # awaiting_submission
-    content = message.text or message.caption or ""
-    
-    # Проверяем, не похоже ли сообщение на вопрос (а не на домашку)
-    question_words = ["как", "почему", "что", "какой", "где", "когда", "кто", "объясни", "подскажи", "расскажи", "помоги", "не понимаю", "не понял", "что такое"]
-    is_question = any(content.lower().strip().startswith(word) or content.lower().strip().endswith("?") for word in question_words)
-    
-    if is_question:
-        # Это вопрос преподавателю, а не домашнее задание
-        context = await get_memory_context(message.from_user.id)
-        response = ask_teacher([{"role": "user", "content": message.text}], student_context=context)
-        await save_memory(message.from_user.id, f"Вопрос: {message.text[:100]}")
-        await message.answer(response)
-        return
-    
-    # Если это не вопрос — проверяем как домашнее задание
-    await message.answer("🔍 Проверяю твою работу... Это займёт несколько секунд.")
+        if student[4] == 1:  # awaiting_submission
+          content = message.text or message.caption or ""
+        
+          # Проверяем, не похоже ли сообщение на вопрос
+          question_words = ["как", "почему", "что", "какой", "где", "когда", "кто", "объясни", "подскажи", "расскажи", "помоги", "не понимаю", "не понял", "что такое"]
+          is_question = any(content.lower().strip().startswith(word) or content.lower().strip().endswith("?") for word in question_words)
+        
+        if is_question:
+            # Это вопрос преподавателю
+            context = await get_memory_context(message.from_user.id)
+            response = ask_teacher([{"role": "user", "content": message.text}], student_context=context)
+            await save_memory(message.from_user.id, f"Вопрос: {message.text[:100]}")
+            await message.answer(response)
+            return
+        
+            # Если это не вопрос — проверяем как домашнее задание
+        await message.answer("🔍 Проверяю твою работу... Это займёт несколько секунд.")
         try:
             result = evaluate_submission("text", content, CRITERIA_DEFAULT)
             total_score = result.get("total_score", 0)
