@@ -1,16 +1,17 @@
 import os
-import sqlite3
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from openai import OpenAI
+from supabase import create_client, Client
 import config
 import uuid
 import time
-import urllib.request
-import json
 
-DATABASE_URL = config.TURSO_URL
-DATABASE_TOKEN = config.TURSO_TOKEN
+SUPABASE_URL = config.SUPABASE_URL
+SUPABASE_KEY = config.SUPABASE_KEY
+
+# Supabase клиент
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Qdrant клиент
 qdrant_client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
@@ -54,128 +55,112 @@ def search_memory_qdrant(student_id, query_text, limit=5):
     )
     return [r.payload["text"] for r in results]
 
-def turso_query(sql, params=None):
-    """Выполняет SQL-запрос к Turso через HTTP API."""
-    url = f"{DATABASE_URL.replace('libsql://', 'https://')}/v2/pipeline"
-    headers = {
-        "Authorization": f"Bearer {DATABASE_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "requests": [
-            {"type": "execute", "stmt": {"sql": sql, "args": params or []}}
-        ]
-    }
-    req = urllib.request.Request(url, data=json.dumps(data).encode(), headers=headers, method="POST")
-    with urllib.request.urlopen(req) as response:
-        result = json.loads(response.read())
-        return result
-
-def turso_query_sync(sql, params=None):
-    """Синхронная обёртка для turso_query."""
-    import asyncio
-    return asyncio.run(turso_query(sql, params))
-
 async def init_db():
     init_qdrant()
     try:
-        turso_query_sync('''
+        supabase.table("students").select("*").limit(1).execute()
+    except:
+        # Таблицы ещё не созданы — создаём
+        supabase.query("""
             CREATE TABLE IF NOT EXISTS students (
-                telegram_id INTEGER PRIMARY KEY,
+                telegram_id BIGINT PRIMARY KEY,
                 name TEXT,
                 current_module INTEGER DEFAULT 1,
                 current_lesson INTEGER DEFAULT 1,
-                awaiting_submission BOOLEAN DEFAULT 0,
+                awaiting_submission BOOLEAN DEFAULT FALSE,
                 assignment_type TEXT
             )
-        ''')
-        turso_query_sync('''
+        """).execute()
+        supabase.query("""
             CREATE TABLE IF NOT EXISTS submissions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT,
                 module INTEGER,
                 lesson INTEGER,
                 type TEXT,
                 content TEXT,
                 score REAL,
                 feedback TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                timestamp TIMESTAMPTZ DEFAULT NOW()
             )
-        ''')
-        turso_query_sync('''
+        """).execute()
+        supabase.query("""
             CREATE TABLE IF NOT EXISTS memory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                telegram_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                telegram_id BIGINT,
                 text TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                timestamp TIMESTAMPTZ DEFAULT NOW()
             )
-        ''')
-    except Exception as e:
-        print(f"Warning: Could not create Turso tables: {e}")
-        print("Falling back to SQLite for this session.")
+        """).execute()
 
 async def get_student(telegram_id):
     try:
-        result = turso_query_sync("SELECT * FROM students WHERE telegram_id = ?", (telegram_id,))
-        results = result.get("results", [{}])[0].get("response", {}).get("result", {}).get("rows", [])
-        return results[0] if results else None
+        result = supabase.table("students").select("*").eq("telegram_id", telegram_id).execute()
+        rows = result.data
+        if rows:
+            row = rows[0]
+            return (row["telegram_id"], row["name"], row["current_module"],
+                    row["current_lesson"], row["awaiting_submission"], row.get("assignment_type"))
+        return None
     except:
         return None
 
 async def add_student(telegram_id, name):
     try:
-        turso_query_sync(
-            "INSERT OR IGNORE INTO students (telegram_id, name) VALUES (?, ?)",
-            (telegram_id, name)
-        )
+        supabase.table("students").upsert({
+            "telegram_id": telegram_id,
+            "name": name
+        }).execute()
     except:
         pass
 
 async def update_progress(telegram_id, module, lesson):
     try:
-        turso_query_sync(
-            "UPDATE students SET current_module=?, current_lesson=? WHERE telegram_id=?",
-            (module, lesson, telegram_id)
-        )
+        supabase.table("students").update({
+            "current_module": module,
+            "current_lesson": lesson
+        }).eq("telegram_id", telegram_id).execute()
     except:
         pass
 
 async def set_awaiting_submission(telegram_id, status, assignment_type=None):
     try:
-        turso_query_sync(
-            "UPDATE students SET awaiting_submission=?, assignment_type=? WHERE telegram_id=?",
-            (status, assignment_type, telegram_id)
-        )
+        supabase.table("students").update({
+            "awaiting_submission": status,
+            "assignment_type": assignment_type
+        }).eq("telegram_id", telegram_id).execute()
     except:
         pass
 
 async def add_submission(telegram_id, module, lesson, sub_type, content, score, feedback):
     try:
-        turso_query_sync(
-            "INSERT INTO submissions (telegram_id, module, lesson, type, content, score, feedback) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (telegram_id, module, lesson, sub_type, content, score, feedback)
-        )
+        supabase.table("submissions").insert({
+            "telegram_id": telegram_id,
+            "module": module,
+            "lesson": lesson,
+            "type": sub_type,
+            "content": content,
+            "score": score,
+            "feedback": feedback
+        }).execute()
     except:
         pass
 
 async def save_memory(telegram_id, text):
     # add_memory_qdrant(telegram_id, text)
     try:
-        turso_query_sync(
-            "INSERT INTO memory (telegram_id, text) VALUES (?, ?)",
-            (telegram_id, text)
-        )
+        supabase.table("memory").insert({
+            "telegram_id": telegram_id,
+            "text": text
+        }).execute()
     except:
         pass
 
 async def get_memory_context(telegram_id, query_text=None, limit=5):
     try:
-        result = turso_query_sync(
-            "SELECT text FROM memory WHERE telegram_id = ? ORDER BY timestamp DESC LIMIT ?",
-            (telegram_id, limit)
-        )
-        rows = result.get("results", [{}])[0].get("response", {}).get("result", {}).get("rows", [])
-        texts = [row[0]["value"] for row in rows if row]
+        result = supabase.table("memory").select("text").eq("telegram_id", telegram_id)\
+            .order("timestamp", desc=True).limit(limit).execute()
+        texts = [row["text"] for row in result.data]
         return "\n".join(texts) if texts else ""
     except:
         return ""
