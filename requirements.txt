@@ -6,4 +6,4 @@ aiohttp
 aiosqlite
 qdrant-client
 flask
-libsql-client
+libsql-experimental
