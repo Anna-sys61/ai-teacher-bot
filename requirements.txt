@@ -6,5 +6,4 @@ aiohttp
 aiosqlite
 qdrant-client
 flask
-libsql-experimental
 supabase
