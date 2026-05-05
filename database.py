@@ -1,11 +1,13 @@
 import os
+import sqlite3
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from openai import OpenAI
 import config
 import uuid
 import time
-import libsql_client
+import urllib.request
+import json
 
 DATABASE_URL = config.TURSO_URL
 DATABASE_TOKEN = config.TURSO_TOKEN
@@ -52,16 +54,32 @@ def search_memory_qdrant(student_id, query_text, limit=5):
     )
     return [r.payload["text"] for r in results]
 
-def get_client():
-    return libsql_client.create_client(
-        url=DATABASE_URL,
-        auth_token=DATABASE_TOKEN
-    )
+def turso_query(sql, params=None):
+    """Выполняет SQL-запрос к Turso через HTTP API."""
+    url = f"{DATABASE_URL.replace('libsql://', 'https://')}/v2/pipeline"
+    headers = {
+        "Authorization": f"Bearer {DATABASE_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "requests": [
+            {"type": "execute", "stmt": {"sql": sql, "args": params or []}}
+        ]
+    }
+    req = urllib.request.Request(url, data=json.dumps(data).encode(), headers=headers, method="POST")
+    with urllib.request.urlopen(req) as response:
+        result = json.loads(response.read())
+        return result
+
+def turso_query_sync(sql, params=None):
+    """Синхронная обёртка для turso_query."""
+    import asyncio
+    return asyncio.run(turso_query(sql, params))
 
 async def init_db():
-    client = get_client()
+    init_qdrant()
     try:
-        await client.execute('''
+        turso_query_sync('''
             CREATE TABLE IF NOT EXISTS students (
                 telegram_id INTEGER PRIMARY KEY,
                 name TEXT,
@@ -71,7 +89,7 @@ async def init_db():
                 assignment_type TEXT
             )
         ''')
-        await client.execute('''
+        turso_query_sync('''
             CREATE TABLE IF NOT EXISTS submissions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 telegram_id INTEGER,
@@ -84,7 +102,7 @@ async def init_db():
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        await client.execute('''
+        turso_query_sync('''
             CREATE TABLE IF NOT EXISTS memory (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 telegram_id INTEGER,
@@ -92,81 +110,72 @@ async def init_db():
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-    finally:
-        await client.close()
-    init_qdrant()
+    except Exception as e:
+        print(f"Warning: Could not create Turso tables: {e}")
+        print("Falling back to SQLite for this session.")
 
 async def get_student(telegram_id):
-    client = get_client()
     try:
-        result = await client.execute(
-            "SELECT * FROM students WHERE telegram_id = ?",
-            (telegram_id,)
-        )
-        rows = result.rows
-        return rows[0] if rows else None
-    finally:
-        await client.close()
+        result = turso_query_sync("SELECT * FROM students WHERE telegram_id = ?", (telegram_id,))
+        results = result.get("results", [{}])[0].get("response", {}).get("result", {}).get("rows", [])
+        return results[0] if results else None
+    except:
+        return None
 
 async def add_student(telegram_id, name):
-    client = get_client()
     try:
-        await client.execute(
+        turso_query_sync(
             "INSERT OR IGNORE INTO students (telegram_id, name) VALUES (?, ?)",
             (telegram_id, name)
         )
-    finally:
-        await client.close()
+    except:
+        pass
 
 async def update_progress(telegram_id, module, lesson):
-    client = get_client()
     try:
-        await client.execute(
+        turso_query_sync(
             "UPDATE students SET current_module=?, current_lesson=? WHERE telegram_id=?",
             (module, lesson, telegram_id)
         )
-    finally:
-        await client.close()
+    except:
+        pass
 
 async def set_awaiting_submission(telegram_id, status, assignment_type=None):
-    client = get_client()
     try:
-        await client.execute(
+        turso_query_sync(
             "UPDATE students SET awaiting_submission=?, assignment_type=? WHERE telegram_id=?",
             (status, assignment_type, telegram_id)
         )
-    finally:
-        await client.close()
+    except:
+        pass
 
 async def add_submission(telegram_id, module, lesson, sub_type, content, score, feedback):
-    client = get_client()
     try:
-        await client.execute(
+        turso_query_sync(
             "INSERT INTO submissions (telegram_id, module, lesson, type, content, score, feedback) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (telegram_id, module, lesson, sub_type, content, score, feedback)
         )
-    finally:
-        await client.close()
+    except:
+        pass
 
 async def save_memory(telegram_id, text):
     # add_memory_qdrant(telegram_id, text)
-    client = get_client()
     try:
-        await client.execute(
+        turso_query_sync(
             "INSERT INTO memory (telegram_id, text) VALUES (?, ?)",
             (telegram_id, text)
         )
-    finally:
-        await client.close()
+    except:
+        pass
 
 async def get_memory_context(telegram_id, query_text=None, limit=5):
-    client = get_client()
     try:
-        result = await client.execute(
+        result = turso_query_sync(
             "SELECT text FROM memory WHERE telegram_id = ? ORDER BY timestamp DESC LIMIT ?",
             (telegram_id, limit)
         )
-        texts = [row[0] for row in result.rows]
+        rows = result.get("results", [{}])[0].get("response", {}).get("result", {}).get("rows", [])
+        texts = [row[0]["value"] for row in rows if row]
         return "\n".join(texts) if texts else ""
-    finally:
-        await client.close()
+    except:
+        return ""
