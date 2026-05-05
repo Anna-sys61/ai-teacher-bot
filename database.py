@@ -1,12 +1,14 @@
-import aiosqlite
+import os
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from openai import OpenAI
 import config
 import uuid
 import time
+import libsql_client
 
-DATABASE = "students.db"
+DATABASE_URL = config.TURSO_URL
+DATABASE_TOKEN = config.TURSO_TOKEN
 
 # Qdrant клиент
 qdrant_client = QdrantClient(url=config.QDRANT_URL, api_key=config.QDRANT_API_KEY)
@@ -50,10 +52,16 @@ def search_memory_qdrant(student_id, query_text, limit=5):
     )
     return [r.payload["text"] for r in results]
 
-# SQLite функции остаются как есть
+def get_client():
+    return libsql_client.create_client(
+        url=DATABASE_URL,
+        auth_token=DATABASE_TOKEN
+    )
+
 async def init_db():
-    async with aiosqlite.connect(DATABASE) as db:
-        await db.execute('''
+    client = get_client()
+    try:
+        await client.execute('''
             CREATE TABLE IF NOT EXISTS students (
                 telegram_id INTEGER PRIMARY KEY,
                 name TEXT,
@@ -63,7 +71,7 @@ async def init_db():
                 assignment_type TEXT
             )
         ''')
-        await db.execute('''
+        await client.execute('''
             CREATE TABLE IF NOT EXISTS submissions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 telegram_id INTEGER,
@@ -76,46 +84,89 @@ async def init_db():
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        await db.commit()
+        await client.execute('''
+            CREATE TABLE IF NOT EXISTS memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id INTEGER,
+                text TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+    finally:
+        await client.close()
     init_qdrant()
 
 async def get_student(telegram_id):
-    async with aiosqlite.connect(DATABASE) as db:
-        async with db.execute("SELECT * FROM students WHERE telegram_id=?", (telegram_id,)) as cursor:
-            return await cursor.fetchone()
+    client = get_client()
+    try:
+        result = await client.execute(
+            "SELECT * FROM students WHERE telegram_id = ?",
+            (telegram_id,)
+        )
+        rows = result.rows
+        return rows[0] if rows else None
+    finally:
+        await client.close()
 
 async def add_student(telegram_id, name):
-    async with aiosqlite.connect(DATABASE) as db:
-        await db.execute("INSERT OR IGNORE INTO students (telegram_id, name) VALUES (?, ?)", (telegram_id, name))
-        await db.commit()
+    client = get_client()
+    try:
+        await client.execute(
+            "INSERT OR IGNORE INTO students (telegram_id, name) VALUES (?, ?)",
+            (telegram_id, name)
+        )
+    finally:
+        await client.close()
 
 async def update_progress(telegram_id, module, lesson):
-    async with aiosqlite.connect(DATABASE) as db:
-        await db.execute("UPDATE students SET current_module=?, current_lesson=? WHERE telegram_id=?", (module, lesson, telegram_id))
-        await db.commit()
+    client = get_client()
+    try:
+        await client.execute(
+            "UPDATE students SET current_module=?, current_lesson=? WHERE telegram_id=?",
+            (module, lesson, telegram_id)
+        )
+    finally:
+        await client.close()
 
 async def set_awaiting_submission(telegram_id, status, assignment_type=None):
-    async with aiosqlite.connect(DATABASE) as db:
-        await db.execute("UPDATE students SET awaiting_submission=?, assignment_type=? WHERE telegram_id=?", (status, assignment_type, telegram_id))
-        await db.commit()
+    client = get_client()
+    try:
+        await client.execute(
+            "UPDATE students SET awaiting_submission=?, assignment_type=? WHERE telegram_id=?",
+            (status, assignment_type, telegram_id)
+        )
+    finally:
+        await client.close()
 
 async def add_submission(telegram_id, module, lesson, sub_type, content, score, feedback):
-    async with aiosqlite.connect(DATABASE) as db:
-        await db.execute("INSERT INTO submissions (telegram_id, module, lesson, type, content, score, feedback) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                         (telegram_id, module, lesson, sub_type, content, score, feedback))
-        await db.commit()
-
-async def get_memory_context(telegram_id, query_text, limit=3):
-    """Получает релевантные воспоминания из Qdrant"""
+    client = get_client()
     try:
-        memories = search_memory_qdrant(telegram_id, query_text, limit)
-        return "\n".join(memories) if memories else ""
-    except:
-        return ""
+        await client.execute(
+            "INSERT INTO submissions (telegram_id, module, lesson, type, content, score, feedback) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (telegram_id, module, lesson, sub_type, content, score, feedback)
+        )
+    finally:
+        await client.close()
 
 async def save_memory(telegram_id, text):
-    """Сохраняет событие и в Qdrant, и в SQLite"""
-   # add_memory_qdrant(telegram_id, text)
-    async with aiosqlite.connect(DATABASE) as db:
-        await db.execute("INSERT INTO memory (telegram_id, text) VALUES (?, ?)", (telegram_id, text))
-        await db.commit()
+    # add_memory_qdrant(telegram_id, text)
+    client = get_client()
+    try:
+        await client.execute(
+            "INSERT INTO memory (telegram_id, text) VALUES (?, ?)",
+            (telegram_id, text)
+        )
+    finally:
+        await client.close()
+
+async def get_memory_context(telegram_id, query_text=None, limit=5):
+    client = get_client()
+    try:
+        result = await client.execute(
+            "SELECT text FROM memory WHERE telegram_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (telegram_id, limit)
+        )
+        texts = [row[0] for row in result.rows]
+        return "\n".join(texts) if texts else ""
+    finally:
+        await client.close()
